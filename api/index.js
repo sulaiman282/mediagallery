@@ -1,8 +1,4 @@
-import express from 'express';
-import cors from 'cors';
 import { v2 as cloudinary } from 'cloudinary';
-
-const app = express();
 
 // Configure Cloudinary
 cloudinary.config({
@@ -11,148 +7,143 @@ cloudinary.config({
   api_secret: process.env.VITE_CLOUDINARY_API_SECRET,
 });
 
-app.use(cors());
-app.use(express.json());
+// Helper to handle CORS
+const setCorsHeaders = (res) => {
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,DELETE,POST,PUT,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+};
 
-// Fetch all media with pagination
-app.get('/api/media', async (req, res) => {
-  try {
-    const { page = 1, limit = 500, type = 'all' } = req.query;
-    
-    let expression = 'resource_type:image OR resource_type:video';
-    
-    if (type === 'image') {
-      expression = 'resource_type:image';
-    } else if (type === 'video') {
-      expression = 'resource_type:video';
-    }
+export default async function handler(req, res) {
+  setCorsHeaders(res);
 
-    const result = await cloudinary.search
-      .expression(expression)
-      .sort_by('created_at', 'desc')
-      .max_results(parseInt(limit))
-      .execute();
-
-    res.json({
-      success: true,
-      resources: result.resources,
-      total_count: result.total_count,
-    });
-  } catch (error) {
-    console.error('Error fetching media:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+  // Handle preflight
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
   }
-});
 
-// Get media by resource type
-app.get('/api/media/:resourceType', async (req, res) => {
+  const { url, method } = req;
+  const path = url.replace('/api', '');
+
   try {
-    const { resourceType } = req.params;
-    const { max_results = 500 } = req.query;
+    // Fetch all media
+    if (path.startsWith('/media') && method === 'GET' && !path.includes('/media/')) {
+      const { type = 'all' } = req.query;
+      
+      let expression = 'resource_type:image OR resource_type:video';
+      
+      if (type === 'image') {
+        expression = 'resource_type:image';
+      } else if (type === 'video') {
+        expression = 'resource_type:video';
+      }
 
-    const result = await cloudinary.api.resources({
-      resource_type: resourceType,
-      type: 'upload',
-      max_results: parseInt(max_results),
-    });
+      const result = await cloudinary.search
+        .expression(expression)
+        .sort_by('created_at', 'desc')
+        .max_results(500)
+        .execute();
 
-    res.json({
-      success: true,
-      resources: result.resources,
-    });
-  } catch (error) {
-    console.error('Error fetching media:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
-});
-
-// Delete single media item
-app.delete('/api/media/:resourceType/:publicId', async (req, res) => {
-  try {
-    const { resourceType, publicId } = req.params;
-    
-    await cloudinary.uploader.destroy(publicId, {
-      resource_type: resourceType,
-      invalidate: true,
-    });
-
-    res.json({
-      success: true,
-      message: 'Media deleted successfully',
-    });
-  } catch (error) {
-    console.error('Error deleting media:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
-});
-
-// Delete all media
-app.delete('/api/media/all', async (req, res) => {
-  try {
-    // Fetch all resources
-    const imageResult = await cloudinary.api.resources({
-      resource_type: 'image',
-      type: 'upload',
-      max_results: 500,
-    });
-
-    const videoResult = await cloudinary.api.resources({
-      resource_type: 'video',
-      type: 'upload',
-      max_results: 500,
-    });
-
-    const allPublicIds = [
-      ...imageResult.resources.map(r => r.public_id),
-      ...videoResult.resources.map(r => r.public_id),
-    ];
-
-    if (allPublicIds.length === 0) {
-      return res.json({
+      return res.status(200).json({
         success: true,
-        message: 'No media to delete',
-        deleted: 0,
+        resources: result.resources,
+        total_count: result.total_count,
       });
     }
 
-    // Delete images
-    if (imageResult.resources.length > 0) {
-      await cloudinary.api.delete_resources(
-        imageResult.resources.map(r => r.public_id),
-        { resource_type: 'image' }
-      );
+    // Delete all media
+    if (path === '/media/all' && method === 'DELETE') {
+      const imageResult = await cloudinary.api.resources({
+        resource_type: 'image',
+        type: 'upload',
+        max_results: 500,
+      });
+
+      const videoResult = await cloudinary.api.resources({
+        resource_type: 'video',
+        type: 'upload',
+        max_results: 500,
+      });
+
+      const allPublicIds = [
+        ...imageResult.resources.map(r => r.public_id),
+        ...videoResult.resources.map(r => r.public_id),
+      ];
+
+      if (allPublicIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          message: 'No media to delete',
+          deleted: 0,
+        });
+      }
+
+      if (imageResult.resources.length > 0) {
+        await cloudinary.api.delete_resources(
+          imageResult.resources.map(r => r.public_id),
+          { resource_type: 'image' }
+        );
+      }
+
+      if (videoResult.resources.length > 0) {
+        await cloudinary.api.delete_resources(
+          videoResult.resources.map(r => r.public_id),
+          { resource_type: 'video' }
+        );
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `Successfully deleted ${allPublicIds.length} items`,
+        deleted: allPublicIds.length,
+      });
     }
 
-    // Delete videos
-    if (videoResult.resources.length > 0) {
-      await cloudinary.api.delete_resources(
-        videoResult.resources.map(r => r.public_id),
-        { resource_type: 'video' }
-      );
+    // Delete single media
+    if (path.match(/\/media\/\w+\/.+/) && method === 'DELETE') {
+      const parts = path.split('/');
+      const resourceType = parts[2];
+      const publicId = decodeURIComponent(parts[3]);
+
+      await cloudinary.uploader.destroy(publicId, {
+        resource_type: resourceType,
+        invalidate: true,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Media deleted successfully',
+      });
     }
 
-    res.json({
-      success: true,
-      message: `Successfully deleted ${allPublicIds.length} items`,
-      deleted: allPublicIds.length,
+    // Get media by resource type
+    if (path.match(/\/media\/\w+$/) && method === 'GET') {
+      const resourceType = path.split('/')[2];
+      
+      const result = await cloudinary.api.resources({
+        resource_type: resourceType,
+        type: 'upload',
+        max_results: 500,
+      });
+
+      return res.status(200).json({
+        success: true,
+        resources: result.resources,
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      error: 'Not found',
     });
+
   } catch (error) {
-    console.error('Error deleting all media:', error);
-    res.status(500).json({
+    console.error('API Error:', error);
+    return res.status(500).json({
       success: false,
       error: error.message,
     });
   }
-});
+}
 
-// Export for Vercel serverless
-export default app;
