@@ -41,7 +41,7 @@ export const uploadToCloudinary = async (file, resourceType = 'auto') => {
 };
 
 // Fetch media from backend proxy server
-const API_URL = import.meta.env.PROD 
+const API_URL = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
   ? '/api'  // Production: use relative path (same domain)
   : 'http://localhost:3001/api';  // Development: use localhost
 
